@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
+
+# omit managed components
+managed_components/
+
+# ESP-IDF specific
+sdkconfig.old
+sdkconfig.backup
+*.bin
+*.elf
