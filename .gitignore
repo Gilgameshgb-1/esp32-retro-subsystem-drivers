@@ -10,11 +10,27 @@ CMakeCache.txt
 cmake_install.cmake
 *.cmake
 
+# Vscode stuff
+.vscode/
+
+# actual images for esp
+tools/images/
+
 # omit managed components
 managed_components/
 
 # ESP-IDF specific
+sdkconfig
 sdkconfig.old
 sdkconfig.backup
 *.bin
 *.elf
+*.map
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
