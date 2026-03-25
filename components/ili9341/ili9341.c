@@ -9,6 +9,9 @@
 
 static const char *TAG = "ili9341";
 
+/* Must match .queue_size in spi_device_interface_config_t */
+#define SPI_QUEUE_DEPTH  7
+
 /* Module-private state */
 static spi_device_handle_t s_spi;
 static int                 s_pin_dc;
@@ -146,8 +149,8 @@ void ili9341_init(const ili9341_config_t *config)
     lcd_init_sequence();
 }
 
-//fill_rect is mostly a test function to check simple things like the display working
-//there is no checking of the parameters, so if you set x+w > width it will just write to the next line and etc
+// fill_rect is mostly a test function to check simple things like the display working
+// there is no checking of the parameters, so if you set x+w > width it will wrap
 void ili9341_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     lcd_set_window(x, y, x + w - 1, y + h - 1);
@@ -159,12 +162,33 @@ void ili9341_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t 
     }
 
     gpio_set_level(s_pin_dc, 1);
+
+    // Ring of transaction descriptors so DMA can pipeline rows.
+    // Every row points to the same line_buf (same color), only the
+    // descriptor slot rotates.
+    spi_transaction_t trans[SPI_QUEUE_DEPTH];
+    memset(trans, 0, sizeof(trans));
+    int queued = 0;
+
     for (int row = 0; row < h; row++) {
-        spi_transaction_t t = {
-            .length    = w * 16,
-            .tx_buffer = line_buf,
-        };
-        spi_device_polling_transmit(s_spi, &t);
+        if (queued == SPI_QUEUE_DEPTH) {
+            spi_transaction_t *done;
+            spi_device_get_trans_result(s_spi, &done, portMAX_DELAY);
+            queued--;
+        }
+
+        int slot = row % SPI_QUEUE_DEPTH;
+        trans[slot].length    = w * 16;
+        trans[slot].tx_buffer = line_buf;
+        spi_device_queue_trans(s_spi, &trans[slot], portMAX_DELAY);
+        queued++;
+    }
+
+    // Drain remaining in-flight transactions
+    while (queued > 0) {
+        spi_transaction_t *done;
+        spi_device_get_trans_result(s_spi, &done, portMAX_DELAY);
+        queued--;
     }
 }
 
@@ -195,17 +219,30 @@ void ili9341_draw_image(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const ui
     gpio_set_level(s_pin_dc, 1);
 
     int row_bytes = w * 2;
+
+    // Same ring approach as fill_rect: keep up to SPI_QUEUE_DEPTH
+    // transactions in flight so the DMA engine is never idle between rows
+    spi_transaction_t trans[SPI_QUEUE_DEPTH];
+    memset(trans, 0, sizeof(trans));
+    int queued = 0;
+
     for (int row = 0; row < h; row++) {
-        // Transaction is defined as follows:
-        // currently we hand over a pointer to the start of the
-        // entire image data and then what we just do we add to the pointer
-        // the length of the buffer we send to the display
-        // so in the first loop we send the first row (0*row_bytes) + pointer to pos 0
-        // afterwards we move by 1 and etc until all of the frames are sent
-        spi_transaction_t t = {
-            .length    = row_bytes * 8,
-            .tx_buffer = data + row * row_bytes,
-        };
-        spi_device_polling_transmit(s_spi, &t);
+        if (queued == SPI_QUEUE_DEPTH) {
+            spi_transaction_t *done;
+            spi_device_get_trans_result(s_spi, &done, portMAX_DELAY);
+            queued--;
+        }
+
+        int slot = row % SPI_QUEUE_DEPTH;
+        trans[slot].length    = row_bytes * 8;
+        trans[slot].tx_buffer = data + row * row_bytes;
+        spi_device_queue_trans(s_spi, &trans[slot], portMAX_DELAY);
+        queued++;
+    }
+
+    while (queued > 0) {
+        spi_transaction_t *done;
+        spi_device_get_trans_result(s_spi, &done, portMAX_DELAY);
+        queued--;
     }
 }

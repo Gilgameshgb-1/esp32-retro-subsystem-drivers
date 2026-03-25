@@ -10,8 +10,9 @@ CMakeCache.txt
 cmake_install.cmake
 *.cmake
 
-# Vscode stuff
+# Vscode claude stuff
 .vscode/
+.claude/
 
 # actual images for esp
 tools/images/
