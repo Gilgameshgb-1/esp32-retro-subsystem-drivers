@@ -22,14 +22,13 @@ Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured ne
 ---
 
 ## Demo
-<div>
-<video src="https://github.com/user-attachments/assets/64067787-8c87-41f2-bf71-4b4392129b3c" controls width="300"></video>
-<video src="https://github.com/user-attachments/assets/56b53659-db5b-4552-b3b8-1fce25be62a6" controls width="300"></video>
-</div>
-<div>
-<video src="https://github.com/user-attachments/assets/beba5ada-2e8c-40bd-83ea-9f654d9aab2f" controls width="300"></video>
-<video src="https://github.com/user-attachments/assets/1512e12a-8e1c-4eb8-9877-2e11e7749c9d" controls width="300"></video>
-</div>
+| MGS Alert | |
+|---|---|
+| <video src="https://github.com/user-attachments/assets/64067787-8c87-41f2-bf71-4b4392129b3c" controls width="300"></video> | <video src="https://github.com/user-attachments/assets/56b53659-db5b-4552-b3b8-1fce25be62a6" controls width="300"></video> |
+
+| AA Silence | |
+|---|---|
+| <video src="https://github.com/user-attachments/assets/beba5ada-2e8c-40bd-83ea-9f654d9aab2f" controls width="300"></video> | <video src="https://github.com/user-attachments/assets/1512e12a-8e1c-4eb8-9877-2e11e7749c9d" controls width="300"></video> |
 
 ---
 
