@@ -22,7 +22,10 @@ Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured ne
 ---
 
 ## Demo
-
+https://github.com/user-attachments/assets/64067787-8c87-41f2-bf71-4b4392129b3c
+https://github.com/user-attachments/assets/56b53659-db5b-4552-b3b8-1fce25be62a6
+https://github.com/user-attachments/assets/beba5ada-2e8c-40bd-83ea-9f654d9aab2f
+https://github.com/user-attachments/assets/1512e12a-8e1c-4eb8-9877-2e11e7749c9d
 ---
 
 ## Wiring
