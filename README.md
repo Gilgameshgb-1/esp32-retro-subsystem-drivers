@@ -23,18 +23,6 @@ Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured ne
 
 ## Demo
 
-### Alert — image + audio together
-
-<video src="readme-assets/Alert.mp4" controls width="600"></video>
-
-<video src="readme-assets/AlertCMD.mp4" controls width="600"></video>
-
-### Silence — image only
-
-<video src="readme-assets/Silence.mp4" controls width="600"></video>
-
-<video src="readme-assets/SilenceCMD.mp4" controls width="600"></video>
-
 ---
 
 ## Wiring
