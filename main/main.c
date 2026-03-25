@@ -58,60 +58,20 @@ static StreamBufferHandle_t s_audio_sbuf;
  * Owns all i2s_channel_write calls so the WiFi/TCP task on core 0 never
  * blocks inside I2S.
  * ----------------------------------------------------------------------- */
-
-/* -----------------------------------------------------------------------
- * Patched Audio write task
- * ----------------------------------------------------------------------- */
 static void audio_write_task(void *arg)
 {
     (void)arg;
-    
-    /* 1. Force 32-bit alignment so casting to int16_t* is hardware-safe */
-    static uint32_t chunk_words[1024]; 
-    uint8_t *chunk = (uint8_t *)chunk_words;
-    
-    size_t leftover = 0;
-
+    static uint32_t chunk_words[1024];  /* 4096 bytes, 4-byte aligned */
+    uint8_t * const chunk = (uint8_t *)chunk_words;
     for (;;) {
-        /* 2. Read into the buffer directly after any leftover bytes from the last loop */
-        size_t to_read = (sizeof(chunk_words) * 4) - leftover;
-        size_t received = xStreamBufferReceive(s_audio_sbuf,
-                                               chunk + leftover, 
-                                               to_read,
+        size_t received = xStreamBufferReceive(s_audio_sbuf, chunk,
+                                               sizeof(chunk_words),
                                                portMAX_DELAY);
-        
-        if (received > 0) {
-            size_t total = leftover + received;
-            
-            /* 3. Calculate how many complete frames we have (Bitwise AND rounds down to multiple of 4) */
-            size_t bytes_to_write = total & ~3; 
-            
-            if (bytes_to_write > 0) {
-                audio_write((const int16_t *)chunk, bytes_to_write);
-            }
-            
-            /* 4. Save any incomplete frame bytes for the next loop */
-            leftover = total - bytes_to_write;
-            if (leftover > 0) {
-                memmove(chunk, chunk + bytes_to_write, leftover);
-            }
+        if (received >= 2) {
+            audio_write((const int16_t *)chunk, received & ~1u);
         }
     }
 }
-
-/* static void audio_write_task(void *arg)
-{
-    (void)arg;
-    static uint8_t chunk[4096];
-    for (;;) {
-        size_t received = xStreamBufferReceive(s_audio_sbuf,
-                                               chunk, sizeof(chunk),
-                                               portMAX_DELAY);
-        if (received > 0) {
-            audio_write((const int16_t *)chunk, received);
-        }
-    }
-} */
 
 /* -----------------------------------------------------------------------
  * Display refresh task (core 1)
@@ -168,56 +128,28 @@ static void on_image_close(void *arg)
     s_strip_idx  = 0;
 }
 
-/* Port 8081 -- raw 16-bit PCM.
- * Enqueue into the stream buffer with a bounded timeout.  If the buffer
- * is full (audio_write_task hasn't drained it yet) we drop the chunk
- * rather than blocking the TCP task indefinitely -- a brief dropout is
- * far better than stalling lwIP and triggering a watchdog reset. */
-
-/* -----------------------------------------------------------------------
- * Patched TCP Audio Callback
- * ----------------------------------------------------------------------- */
+/* Port 8081 -- raw 16-bit mono PCM at 44100 Hz.
+ * Block until all bytes are queued.  When the stream buffer fills,
+ * recv() stalls, TCP window closes to zero, and the sender pauses --
+ * natural flow control with no data ever dropped. */
 static void on_audio_data(const uint8_t *data, size_t len, void *arg)
 {
     (void)arg;
-    
-    /* Check available space and round down to the nearest multiple of 4 
-       to ensure we NEVER push a partial frame into the stream buffer */
-    size_t available = xStreamBufferSpacesAvailable(s_audio_sbuf);
-    available = available & ~3; 
-
-    size_t to_send = (len < available) ? len : available;
-
-    if (to_send > 0) {
-        xStreamBufferSend(s_audio_sbuf, data, to_send, pdMS_TO_TICKS(50));
-    }
-
-    if (to_send < len) {
-        ESP_LOGD(TAG, "audio: dropped %u bytes to maintain stream alignment", 
-                 (unsigned)(len - to_send));
+    while (len > 0) {
+        size_t sent = xStreamBufferSend(s_audio_sbuf, data, len, portMAX_DELAY);
+        data += sent;
+        len  -= sent;
     }
 }
 
-/* static void on_audio_data(const uint8_t *data, size_t len, void *arg)
-{
-    (void)arg;
-    size_t sent = xStreamBufferSend(s_audio_sbuf, data, len,
-                                    pdMS_TO_TICKS(50));
-    if (sent < len) {
-        ESP_LOGD(TAG, "audio: dropped %u bytes (buffer full)",
-                 (unsigned)(len - sent));
-    }
-} */
-
-/* Queue enough silence to flush the DMA buffer (~250 ms) so the
- * speaker settles quietly; audio_write_task drains it on core 1. */
+/* Queue silence to flush the I2S DMA buffer after playback ends.
+ * 16 x 512 = 8192 bytes = stream buffer capacity = ~93 ms of silence. */
 static void on_audio_close(void *arg)
 {
     (void)arg;
     static const int16_t silence[256] = {0};
-    for (int i = 0; i < 22; i++) {
-        xStreamBufferSend(s_audio_sbuf, silence, sizeof(silence),
-                          pdMS_TO_TICKS(50));
+    for (int i = 0; i < 16; i++) {
+        xStreamBufferSend(s_audio_sbuf, silence, sizeof(silence), portMAX_DELAY);
     }
 }
 
@@ -264,27 +196,25 @@ void app_main(void)
 
     fill_screen_solid(ili9341_rgb565(0, 255, 0));  /* green = connecting */
 
-    /* Wi-Fi -- one call, shared by both servers */
+    /* Wi-Fi */
     if (wifi_connect(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi failed");
         fill_screen_solid(ili9341_rgb565(255, 0, 0));
         return;
     }
 
-    /* Audio -- initialise I2S and start the write task before the TCP
-     * server opens port 8081 so no data arrives before the channel is ready. */
+    /* Audio: init I2S, create stream buffer, start write task on core 1 */
     audio_init(&audio_cfg);
     s_audio_sbuf = xStreamBufferCreate(AUDIO_STREAM_BUF_BYTES, 1);
     if (!s_audio_sbuf) {
-        ESP_LOGE(TAG, "Audio stream buffer alloc failed -- not enough heap");
+        ESP_LOGE(TAG, "Audio stream buffer alloc failed");
         fill_screen_solid(ili9341_rgb565(255, 0, 0));
         return;
     }
     xTaskCreatePinnedToCore(audio_write_task, "audio_write",
-                            4096, NULL, 7, NULL, 1);
+                            8192, NULL, 7, NULL, 1);
 
-    /* Image server: core 0 (alongside Wi-Fi -- image transfers are small
-     * and infrequent so this is fine). */
+    /* Image server: core 0 */
     wifi_server_start(&(wifi_server_config_t){
         .port       = 8080,
         .on_recv    = on_image_data,
@@ -294,8 +224,7 @@ void app_main(void)
         .core_id    = 0,
     });
 
-    /* Audio server: core 1 -- keeps the TCP recv loop for audio completely
-     * off the Wi-Fi interrupt core, preventing lwIP starvation. */
+    /* Audio server: core 1 -- keeps TCP recv away from the WiFi/lwIP core */
     wifi_server_start(&(wifi_server_config_t){
         .port       = 8081,
         .on_recv    = on_audio_data,
