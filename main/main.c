@@ -1,4 +1,6 @@
+#include <stdlib.h>
 #include <string.h>
+#include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -53,6 +55,12 @@ static int                s_strip_idx;
 
 static StreamBufferHandle_t s_audio_sbuf;
 
+/* Audio control state -- written by command task (core 0), read by audio task (core 1) */
+static volatile bool    s_audio_paused  = false;
+static volatile bool    s_audio_stopped = false;
+static volatile uint8_t s_audio_volume  = 100;  /* 0–100 */
+static volatile int     s_audio_client_sock = -1; /* fd of active audio TCP client, -1 = none */
+
 /* -----------------------------------------------------------------------
  * Audio write task (core 1)
  * Owns all i2s_channel_write calls so the WiFi/TCP task on core 0 never
@@ -63,13 +71,39 @@ static void audio_write_task(void *arg)
     (void)arg;
     static uint32_t chunk_words[1024];  /* 4096 bytes, 4-byte aligned */
     uint8_t * const chunk = (uint8_t *)chunk_words;
+    static const int16_t silence[256] = {0};  /* ~5.8 ms of silence */
+
     for (;;) {
+        if (s_audio_stopped) {
+            xStreamBufferReset(s_audio_sbuf);
+            audio_write(silence, sizeof(silence));
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        if (s_audio_paused) {
+            /* Don't consume the buffer; write silence to keep I2S clock alive */
+            audio_write(silence, sizeof(silence));
+            continue;
+        }
+
+        /* Wait up to 20 ms so we can re-check control state promptly */
         size_t received = xStreamBufferReceive(s_audio_sbuf, chunk,
                                                sizeof(chunk_words),
-                                               portMAX_DELAY);
-        if (received >= 2) {
-            audio_write((const int16_t *)chunk, received & ~1u);
+                                               pdMS_TO_TICKS(20));
+        if (received < 2) continue;
+
+        /* Apply volume scaling */
+        uint8_t vol = s_audio_volume;
+        if (vol < 100) {
+            int16_t *samples = (int16_t *)chunk;
+            size_t n = received / 2;
+            for (size_t i = 0; i < n; i++) {
+                samples[i] = (int16_t)((samples[i] * vol) / 100);
+            }
         }
+
+        audio_write((const int16_t *)chunk, received & ~1u);
     }
 }
 
@@ -128,6 +162,12 @@ static void on_image_close(void *arg)
     s_strip_idx  = 0;
 }
 
+static void on_audio_connect(int sock, void *arg)
+{
+    (void)arg;
+    s_audio_client_sock = sock;
+}
+
 /* Port 8081 -- raw 16-bit mono PCM at 44100 Hz.
  * Block until all bytes are queued.  When the stream buffer fills,
  * recv() stalls, TCP window closes to zero, and the sender pauses --
@@ -143,15 +183,60 @@ static void on_audio_data(const uint8_t *data, size_t len, void *arg)
 }
 
 /* Queue silence to flush the I2S DMA buffer after playback ends.
- * 16 x 512 = 8192 bytes = stream buffer capacity = ~93 ms of silence. */
+ * 16 x 512 = 8192 bytes = stream buffer capacity = ~93 ms of silence.
+ * Skip when paused/stopped to avoid blocking on a full or reset buffer. */
 static void on_audio_close(void *arg)
 {
     (void)arg;
+    s_audio_client_sock = -1;
+    if (s_audio_paused || s_audio_stopped) return;
     static const int16_t silence[256] = {0};
     for (int i = 0; i < 16; i++) {
         xStreamBufferSend(s_audio_sbuf, silence, sizeof(silence), portMAX_DELAY);
     }
 }
+
+/* Port 8082 -- plain-text control commands */
+static void on_command_recv(const uint8_t *data, size_t len, void *arg)
+{
+    (void)arg;
+    char cmd[32];
+    size_t n = len < sizeof(cmd) - 1 ? len : sizeof(cmd) - 1;
+    memcpy(cmd, data, n);
+    cmd[n] = '\0';
+    /* Trim trailing whitespace / newlines */
+    for (int i = (int)n - 1; i >= 0 && (cmd[i] == '\n' || cmd[i] == '\r' || cmd[i] == ' '); i--) {
+        cmd[i] = '\0';
+    }
+
+    if (strcmp(cmd, "PLAY") == 0) {
+        s_audio_stopped = false;
+        s_audio_paused  = false;
+        ESP_LOGI(TAG, "Command: PLAY");
+    } else if (strcmp(cmd, "PAUSE") == 0) {
+        s_audio_paused = true;
+        ESP_LOGI(TAG, "Command: PAUSE");
+    } else if (strcmp(cmd, "STOP") == 0) {
+        s_audio_stopped = true;
+        s_audio_paused  = false;
+        /* Kick the sender off so the Python process exits immediately */
+        int sock = s_audio_client_sock;
+        if (sock >= 0) shutdown(sock, SHUT_RDWR);
+        ESP_LOGI(TAG, "Command: STOP");
+    } else if (strncmp(cmd, "VOLUME ", 7) == 0) {
+        int vol = atoi(cmd + 7);
+        if (vol >= 0 && vol <= 100) {
+            s_audio_volume = (uint8_t)vol;
+            ESP_LOGI(TAG, "Command: VOLUME %d", vol);
+        } else {
+            ESP_LOGW(TAG, "VOLUME out of range: %d", vol);
+        }
+    } else {
+        ESP_LOGW(TAG, "Unknown command: %s", cmd);
+    }
+}
+
+static void on_command_close(void *arg) { (void)arg; }
 
 /* -----------------------------------------------------------------------
  * Helpers
@@ -227,6 +312,7 @@ void app_main(void)
     /* Audio server: core 1 -- keeps TCP recv away from the WiFi/lwIP core */
     wifi_server_start(&(wifi_server_config_t){
         .port       = 8081,
+        .on_connect = on_audio_connect,
         .on_recv    = on_audio_data,
         .on_close   = on_audio_close,
         .cb_arg     = NULL,
@@ -234,8 +320,18 @@ void app_main(void)
         .core_id    = 1,
     });
 
+    /* Command server: core 0 */
+    wifi_server_start(&(wifi_server_config_t){
+        .port       = 8082,
+        .on_recv    = on_command_recv,
+        .on_close   = on_command_close,
+        .cb_arg     = NULL,
+        .stack_size = 4096,
+        .core_id    = 0,
+    });
+
     fill_screen_solid(ili9341_rgb565(0, 0, 255));  /* blue = ready */
-    ESP_LOGI(TAG, "Ready -- image: port 8080 | audio: port 8081");
+    ESP_LOGI(TAG, "Ready -- image: 8080 | audio: 8081 | cmd: 8082");
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));

@@ -95,6 +95,8 @@ static void tcp_server_task(void *arg)
             ESP_LOGI(TAG, "[%d] Client connected from " IPSTR,
                      cfg.port, IP2STR((esp_ip4_addr_t *)&client_addr.sin_addr));
 
+            if (cfg.on_connect) cfg.on_connect(client_sock, cfg.cb_arg);
+
             int len;
             while ((len = recv(client_sock, rx_buf, sizeof(rx_buf), 0)) > 0) {
                 if (cfg.on_recv) {

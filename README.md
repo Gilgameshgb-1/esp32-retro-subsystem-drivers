@@ -15,7 +15,7 @@ This is a from-scratch driver stack built on ESP-IDF and FreeRTOS that drives tw
 - **ILI9341 2.8" TFT display** (240×320, RGB565) over SPI with DMA, strip-based rendering, double-buffered
 - **MAX98357A I2S mono amplifier** - raw 16-bit PCM audio output at 44100 Hz
 
-Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured network on boot, then listens on two ports: `8080` for images and `8081` for audio. A companion Python tool on the host decodes and streams the content.
+Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured network on boot, then listens on two ports: `8080` for images and `8081` for audio. On the port `8082` there is a connection that allows us to send commands for control of audio: stop, pause, play, and volume adjustments via python scripts A companion Python tool on the host decodes and streams the content.
 
 **Practical application:** the intended use is as a display/speaker peripheral for an embedded Linux distribution of mine. See: https://github.com/Gilgameshgb-1/yocto-retro-streaming-distro The host device connects over Wi-Fi and pushes images and audio to the ESP32 - no SD card, no USB, no HDMI needed.
 
@@ -30,11 +30,19 @@ Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured ne
 |---|---|
 | <video src="https://github.com/user-attachments/assets/beba5ada-2e8c-40bd-83ea-9f654d9aab2f" controls width="300"></video> | <video src="https://github.com/user-attachments/assets/1512e12a-8e1c-4eb8-9877-2e11e7749c9d" controls width="300"></video> |
 
+| MGS Alert | |
+|---|---|
+| <video src="https://github.com/user-attachments/assets/64067787-8c87-41f2-bf71-4b4392129b3c" controls width="300"></video> | <video src="https://github.com/user-attachments/assets/56b53659-db5b-4552-b3b8-1fce25be62a6" controls width="300"></video> |
+
+| AA Silence | |
+|---|---|
+| <video src="https://github.com/user-attachments/assets/beba5ada-2e8c-40bd-83ea-9f654d9aab2f" controls width="300"></video> | <video src="https://github.com/user-attachments/assets/1512e12a-8e1c-4eb8-9877-2e11e7749c9d" controls width="300"></video> |
+
 ---
 
 ## Wiring
 
-### Display — ILI9341
+### Display - ILI9341
 
 | Display Pin | ESP32 GPIO |
 |-------------|------------|
@@ -46,7 +54,7 @@ Both receive their data over Wi-Fi TCP. The ESP32 connects to your configured ne
 | VCC         | 3.3V       |
 | GND         | GND        |
 
-### Audio — MAX98357A
+### Audio - MAX98357A
 
 | Amplifier Pin | ESP32 GPIO |
 |---------------|------------|
@@ -122,7 +130,7 @@ python tools/send_audio.py 192.168.0.21 sound.mp3
 
 ### Send image + audio together
 
-Sends both simultaneously using threads — image to port 8080, audio to port 8081.
+Sends both simultaneously using threads - image to port 8080, audio to port 8081.
 
 ```bash
 python tools/send_av.py <host> <image> <audio>
@@ -133,13 +141,26 @@ python tools/send_av.py 192.168.0.21 tools/images/alert.jpg sound.mp3
 
 ### Send a video
 
-Extracts frames from a video file, converts each to RGB565, and streams frames + audio simultaneously. (This is highly unstable and I couldn't really get it to work without some extra memory somewhere)
+Extracts frames from a video file, converts each to RGB565, and streams frames + audio simultaneously. (The framerate isn't that great, I will see can it be done better)
+
 
 ```bash
 python tools/send_video.py <host> <video>
 
 # example
 python tools/send_video.py 192.168.0.21 tools/videos/BadApple.mp4
+```
+
+### Send comands
+
+```bash
+python tools/send_command.py <IP> <COMMAND>
+
+# example
+python tools/send_command.py 192.168.0.21 "VOLUME 25"
+python tools/send_command.py 192.168.0.21 PAUSE
+python tools/send_command.py 192.168.0.21 PLAY
+python tools/send_command.py 192.168.0.21 STOP
 ```
 
 ---
