@@ -134,6 +134,9 @@ python tools/send_av.py 192.168.0.21 tools/images/alert.jpg sound.mp3
 ### Send a video
 
 Extracts frames from a video file, converts each to RGB565, and streams frames + audio simultaneously. (The framerate isn't that great, I will see can it be done better)
+Here is a small test with the famous video Bad Apple. It's not performing ideally but is definetely a decent start
+
+https://github.com/user-attachments/assets/0f2e8d79-e7fd-409d-b9ab-8ca2fd23a9be
 
 
 ```bash
