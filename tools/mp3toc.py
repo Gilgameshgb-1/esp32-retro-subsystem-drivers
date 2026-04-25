@@ -5,17 +5,17 @@ The output is a .h file containing a raw int16_t array that can be passed
 directly to audio_play_pcm(). No WAV header is stored -- just samples.
 
 Usage:
-    python mp3toc.py <input.mp3> <output.h> [sample_rate]
+    python3 mp3toc.py <input.mp3> <output.h> [sample_rate]
 
     sample_rate defaults to 44100.
 
 Example:
-    python mp3toc.py sound.mp3 main/sound.h
-    python mp3toc.py sound.mp3 main/sound.h 22050
+    python3 mp3toc.py sound.mp3 main/sound.h
+    python3 mp3toc.py sound.mp3 main/sound.h 22050
 
 Requires pydub and ffmpeg:
     pip install pydub
-    # ffmpeg must be on your PATH: https://ffmpeg.org/download.html
+    sudo apt install ffmpeg   # Debian/Ubuntu; brew install ffmpeg on macOS
 """
 
 import sys

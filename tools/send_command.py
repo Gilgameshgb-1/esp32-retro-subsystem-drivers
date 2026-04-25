@@ -8,14 +8,14 @@ Commands:
     VOLUME <0-100>    Set playback volume (100 = full, 0 = muted)
 
 Usage:
-    python send_command.py <host> <command> [port]
+    python3 send_command.py <host> <command> [port]
 
 Examples:
-    python send_command.py 192.168.1.100 PAUSE
-    python send_command.py 192.168.1.100 PLAY
-    python send_command.py 192.168.1.100 STOP
-    python send_command.py 192.168.1.100 "VOLUME 50"
-    python send_command.py 192.168.1.100 "VOLUME 100"
+    python3 send_command.py 192.168.1.100 PAUSE
+    python3 send_command.py 192.168.1.100 PLAY
+    python3 send_command.py 192.168.1.100 STOP
+    python3 send_command.py 192.168.1.100 "VOLUME 50"
+    python3 send_command.py 192.168.1.100 "VOLUME 100"
 """
 
 import sys

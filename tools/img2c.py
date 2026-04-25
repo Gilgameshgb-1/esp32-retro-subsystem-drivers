@@ -2,13 +2,13 @@
 img2c.py — Convert an image to an RGB565 C header for the ILI9341 driver.
 
 Usage:
-    python img2c.py <input_image> <output.h> [width] [height]
+    python3 img2c.py <input_image> <output.h> [width] [height]
 
     width/height default to 240x320 (full screen).
 
 Example:
-    python img2c.py photo.jpg main/image.h
-    python img2c.py photo.jpg main/image.h 120 160
+    python3 img2c.py photo.jpg main/image.h
+    python3 img2c.py photo.jpg main/image.h 120 160
 
 Requires Pillow:
     pip install Pillow

@@ -6,15 +6,15 @@ resamples to 44100 Hz mono, and streams the raw int16 bytes at real-time
 playback speed so the ESP32's stream buffer is never flooded.
 
 Usage:
-    python send_audio.py <host> <file> [port]
+    python3 send_audio.py <host> <file> [port]
 
 Example:
-    python send_audio.py 192.168.1.100 sound.mp3
-    python send_audio.py 192.168.1.100 sound.wav 8081
+    python3 send_audio.py 192.168.1.100 sound.mp3
+    python3 send_audio.py 192.168.1.100 sound.wav 8081
 
 Requires pydub + ffmpeg:
     pip install pydub
-    winget install ffmpeg   (or brew install ffmpeg)
+    sudo apt install ffmpeg   # Debian/Ubuntu; brew install ffmpeg on macOS
 """
 
 import sys

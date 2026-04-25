@@ -4,11 +4,11 @@ send_image.py — Send an image to the ESP32 display driver over TCP.
 Converts the image to raw RGB565 (240x320) and streams it over a socket.
 
 Usage:
-    python send_image.py <host> <image_path> [width] [height] [port]
+    python3 send_image.py <host> <image_path> [width] [height] [port]
 
 Examples:
-    python send_image.py 192.168.1.100 photo.jpg
-    python send_image.py 192.168.1.100 photo.jpg 240 320 8080
+    python3 send_image.py 192.168.1.100 photo.jpg
+    python3 send_image.py 192.168.1.100 photo.jpg 240 320 8080
 
 Requires Pillow:
     pip install Pillow

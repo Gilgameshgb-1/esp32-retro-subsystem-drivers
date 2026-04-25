@@ -6,13 +6,14 @@ at the same time using threads.  Audio is decoded/resampled on the PC
 (any format pydub supports: MP3, WAV, FLAC, …).
 
 Usage:
-    python send_av.py <host> <image> <audio>
+    python3 send_av.py <host> <image> <audio>
 
 Example:
-    python send_av.py 192.168.1.100 photo.jpg sound.mp3
+    python3 send_av.py 192.168.1.100 photo.jpg sound.mp3
 
 Requires Pillow + pydub + ffmpeg:
     pip install Pillow pydub
+    sudo apt install ffmpeg   # Debian/Ubuntu; brew install ffmpeg on macOS
 """
 
 import sys

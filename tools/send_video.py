@@ -9,15 +9,15 @@ The ESP32 renders each 240x320 frame as it arrives; TCP flow control
 naturally paces the video to match display throughput (~8-10 FPS).
 
 Usage:
-    python send_video.py <host> <video>  [--fps N]
+    python3 send_video.py <host> <video>  [--fps N]
 
 Examples:
-    python send_video.py 192.168.1.100 clip.mp4
-    python send_video.py 192.168.1.100 clip.mp4 --fps 8
+    python3 send_video.py 192.168.1.100 clip.mp4
+    python3 send_video.py 192.168.1.100 clip.mp4 --fps 8
 
 Requires:
     pip install opencv-python pydub numpy
-    winget install ffmpeg   (or brew install ffmpeg)
+    sudo apt install ffmpeg   # Debian/Ubuntu; brew install ffmpeg on macOS
 """
 
 import sys

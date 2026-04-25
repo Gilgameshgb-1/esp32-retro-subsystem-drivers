@@ -1,0 +1,4 @@
+Pillow
+pydub
+opencv-python
+numpy
