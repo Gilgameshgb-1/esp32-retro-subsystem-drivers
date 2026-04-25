@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "ili9341.h"
 #include "framebuffer.h"
@@ -22,7 +23,7 @@ static const ili9341_config_t display_cfg = {
     .pin_cs       =  5,
     .pin_dc       =  2,
     .pin_rst      =  4,
-    .spi_clock_hz = 26 * 1000 * 1000,
+    .spi_clock_hz = 30 * 1000 * 1000,
 };
 
 static const audio_config_t audio_cfg = {
@@ -41,6 +42,32 @@ static SemaphoreHandle_t  s_strip_done;
 static uint16_t           s_strip_y;
 static size_t             s_buf_offset;
 static int                s_strip_idx;
+
+/* -----------------------------------------------------------------------
+ * Image protocol parser state
+ * ----------------------------------------------------------------------- */
+typedef enum {
+    IMG_STATE_HEADER,        /* 2-byte frame header                     */
+    IMG_STATE_FULL_FRAME,    /* raw RGB565 strips (type 0xFF)            */
+    IMG_STATE_PATCH_HEADER,  /* 8-byte patch coords (type 0xDF)          */
+    IMG_STATE_PATCH_DATA,    /* patch pixel data                         */
+} img_parse_state_t;
+
+/* Largest patch the host will ever send: full width × one strip height. */
+#define MAX_PATCH_BYTES  (ILI9341_WIDTH * STRIP_HEIGHT * 2)  /* 19 200 B */
+
+static img_parse_state_t s_img_state      = IMG_STATE_HEADER;
+static uint8_t           s_img_hdr[2];
+static uint8_t           s_img_hdr_pos    = 0;
+
+/* Delta-frame patch state */
+static uint8_t           s_patches_remaining = 0;
+static uint8_t           s_patch_hdr[8];
+static uint8_t           s_patch_hdr_pos     = 0;
+static uint16_t          s_patch_x0, s_patch_y0, s_patch_x1, s_patch_y1;
+static uint8_t          *s_patch_buf         = NULL; /* DMA-capable, app_main alloc */
+static size_t            s_patch_need        = 0;   /* bytes expected for this patch */
+static size_t            s_patch_recv        = 0;   /* bytes received so far         */
 
 /* -----------------------------------------------------------------------
  * Audio shared state
@@ -128,38 +155,142 @@ static void display_refresh_task(void *arg)
  * TCP callbacks
  * ----------------------------------------------------------------------- */
 
-/* Port 8080 -- RGB565 image data, strip by strip */
+/* Port 8080 -- framed RGB565 data.
+ *
+ * Frame wire format:
+ *   Byte 0 : type   — 0xFF full frame | 0xDF delta frame
+ *   Byte 1 : n      — strip count (0xFF) or patch count (0xDF)
+ *
+ * 0xFF: followed by NUM_STRIPS × strip_bytes of raw RGB565.
+ * 0xDF: followed by n patch records, each:
+ *         [x0 y0 x1 y1] as 4 × uint16_t little-endian
+ *         (x1-x0)*(y1-y0)*2 bytes of RGB565 big-endian pixel data
+ *       n == 0 is a valid "no change" frame — nothing follows the header.
+ */
 static void on_image_data(const uint8_t *data, size_t len, void *arg)
 {
     (void)arg;
-    size_t strip_bytes = fb_get_size(s_fb);
 
     while (len > 0) {
-        uint8_t *buf = fb_get_back_buffer(s_fb);
-        size_t   remaining = strip_bytes - s_buf_offset;
-        size_t   to_copy   = (len < remaining) ? len : remaining;
 
-        memcpy(buf + s_buf_offset, data, to_copy);
-        s_buf_offset += to_copy;
-        data         += to_copy;
-        len          -= to_copy;
+        /* ----------------------------------------------------------------
+         * HEADER — 2 bytes: [type, n]
+         * ---------------------------------------------------------------- */
+        if (s_img_state == IMG_STATE_HEADER) {
+            s_img_hdr[s_img_hdr_pos++] = *data++;
+            len--;
+            if (s_img_hdr_pos < 2) continue;
 
-        if (s_buf_offset == strip_bytes) {
-            s_strip_y = s_strip_idx * STRIP_HEIGHT;
-            xSemaphoreGive(s_strip_ready);
-            xSemaphoreTake(s_strip_done, portMAX_DELAY);
-            s_buf_offset = 0;
-            s_strip_idx  = (s_strip_idx + 1) % NUM_STRIPS;
+            s_img_hdr_pos = 0;
+            uint8_t type = s_img_hdr[0];
+            uint8_t n    = s_img_hdr[1];
+
+            if (type == 0xFF) {
+                s_img_state = IMG_STATE_FULL_FRAME;
+            } else if (type == 0xDF) {
+                if (n == 0) {
+                    /* No-change frame — stay in HEADER for the next one */
+                } else {
+                    s_patches_remaining = n;
+                    s_patch_hdr_pos     = 0;
+                    s_img_state         = IMG_STATE_PATCH_HEADER;
+                }
+            } else {
+                ESP_LOGW(TAG, "[img] unknown frame type 0x%02X", type);
+            }
+            continue;
+        }
+
+        /* ----------------------------------------------------------------
+         * FULL FRAME — raw RGB565 strips, same as original path
+         * ---------------------------------------------------------------- */
+        if (s_img_state == IMG_STATE_FULL_FRAME) {
+            size_t  strip_bytes = fb_get_size(s_fb);
+            uint8_t *buf        = fb_get_back_buffer(s_fb);
+            size_t   remaining  = strip_bytes - s_buf_offset;
+            size_t   to_copy    = (len < remaining) ? len : remaining;
+
+            memcpy(buf + s_buf_offset, data, to_copy);
+            s_buf_offset += to_copy;
+            data         += to_copy;
+            len          -= to_copy;
+
+            if (s_buf_offset == strip_bytes) {
+                s_strip_y = s_strip_idx * STRIP_HEIGHT;
+                xSemaphoreGive(s_strip_ready);
+                xSemaphoreTake(s_strip_done, portMAX_DELAY);
+                s_buf_offset = 0;
+                s_strip_idx  = (s_strip_idx + 1) % NUM_STRIPS;
+
+                if (s_strip_idx == 0) {
+                    s_img_state = IMG_STATE_HEADER;
+                }
+            }
+            continue;
+        }
+
+        /* ----------------------------------------------------------------
+         * PATCH HEADER — 8 bytes: x0 y0 x1 y1 (uint16_t LE each)
+         * ---------------------------------------------------------------- */
+        if (s_img_state == IMG_STATE_PATCH_HEADER) {
+            s_patch_hdr[s_patch_hdr_pos++] = *data++;
+            len--;
+            if (s_patch_hdr_pos < 8) continue;
+
+            s_patch_hdr_pos = 0;
+            memcpy(&s_patch_x0, &s_patch_hdr[0], 2);
+            memcpy(&s_patch_y0, &s_patch_hdr[2], 2);
+            memcpy(&s_patch_x1, &s_patch_hdr[4], 2);
+            memcpy(&s_patch_y1, &s_patch_hdr[6], 2);
+
+            s_patch_need = (size_t)(s_patch_x1 - s_patch_x0)
+                         * (size_t)(s_patch_y1 - s_patch_y0) * 2;
+            s_patch_recv = 0;
+            s_img_state  = IMG_STATE_PATCH_DATA;
+            continue;
+        }
+
+        /* ----------------------------------------------------------------
+         * PATCH DATA — accumulate then draw
+         * ---------------------------------------------------------------- */
+        if (s_img_state == IMG_STATE_PATCH_DATA) {
+            size_t remaining = s_patch_need - s_patch_recv;
+            size_t to_copy   = (len < remaining) ? len : remaining;
+
+            memcpy(s_patch_buf + s_patch_recv, data, to_copy);
+            s_patch_recv += to_copy;
+            data         += to_copy;
+            len          -= to_copy;
+
+            if (s_patch_recv == s_patch_need) {
+                uint16_t w = s_patch_x1 - s_patch_x0;
+                uint16_t h = s_patch_y1 - s_patch_y0;
+                ili9341_draw_image(s_patch_x0, s_patch_y0, w, h, s_patch_buf);
+
+                s_patches_remaining--;
+                if (s_patches_remaining == 0) {
+                    s_img_state = IMG_STATE_HEADER;
+                } else {
+                    s_patch_hdr_pos = 0;
+                    s_img_state     = IMG_STATE_PATCH_HEADER;
+                }
+            }
+            continue;
         }
     }
 }
 
-/* Reset strip state so the next connection always starts at the top of the frame */
+/* Reset all parser state so the next connection starts clean. */
 static void on_image_close(void *arg)
 {
     (void)arg;
-    s_buf_offset = 0;
-    s_strip_idx  = 0;
+    s_buf_offset        = 0;
+    s_strip_idx         = 0;
+    s_img_state         = IMG_STATE_HEADER;
+    s_img_hdr_pos       = 0;
+    s_patches_remaining = 0;
+    s_patch_hdr_pos     = 0;
+    s_patch_recv        = 0;
 }
 
 static void on_audio_connect(int sock, void *arg)
@@ -274,6 +405,9 @@ void app_main(void)
 
     s_fb = fb_alloc(ILI9341_WIDTH, STRIP_HEIGHT);
     if (!s_fb) { ESP_LOGE(TAG, "Framebuffer alloc failed"); return; }
+
+    s_patch_buf = heap_caps_malloc(MAX_PATCH_BYTES, MALLOC_CAP_DMA);
+    if (!s_patch_buf) { ESP_LOGE(TAG, "Patch buffer alloc failed"); return; }
 
     s_strip_ready = xSemaphoreCreateBinary();
     s_strip_done  = xSemaphoreCreateBinary();
