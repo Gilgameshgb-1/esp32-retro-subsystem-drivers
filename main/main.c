@@ -23,7 +23,7 @@ static const ili9341_config_t display_cfg = {
     .pin_cs       =  5,
     .pin_dc       =  2,
     .pin_rst      =  4,
-    .spi_clock_hz = 30 * 1000 * 1000,
+    .spi_clock_hz = 33 * 1000 * 1000,
 };
 
 static const audio_config_t audio_cfg = {
@@ -217,8 +217,9 @@ static void on_image_data(const uint8_t *data, size_t len, void *arg)
 
             if (s_buf_offset == strip_bytes) {
                 s_strip_y = s_strip_idx * STRIP_HEIGHT;
-                xSemaphoreGive(s_strip_ready);
-                xSemaphoreTake(s_strip_done, portMAX_DELAY);
+                ili9341_draw_image(0, s_strip_idx * STRIP_HEIGHT, ILI9341_WIDTH, STRIP_HEIGHT, buf);
+                //xSemaphoreGive(s_strip_ready);
+                //xSemaphoreTake(s_strip_done, portMAX_DELAY);
                 s_buf_offset = 0;
                 s_strip_idx  = (s_strip_idx + 1) % NUM_STRIPS;
 
@@ -411,14 +412,14 @@ void app_main(void)
 
     s_strip_ready = xSemaphoreCreateBinary();
     s_strip_done  = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(display_refresh_task, "refresh", 4096, NULL, 5, NULL, 1);
+    //xTaskCreatePinnedToCore(display_refresh_task, "refresh", 4096, NULL, 5, NULL, 1);
 
-    fill_screen_solid(ili9341_rgb565(0, 255, 0));  /* green = connecting */
+    //fill_screen_solid(ili9341_rgb565(0, 255, 0));  /* green = connecting */
 
     /* Wi-Fi */
     if (wifi_connect(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi failed");
-        fill_screen_solid(ili9341_rgb565(255, 0, 0));
+        //fill_screen_solid(ili9341_rgb565(255, 0, 0));
         return;
     }
 
@@ -427,7 +428,7 @@ void app_main(void)
     s_audio_sbuf = xStreamBufferCreate(AUDIO_STREAM_BUF_BYTES, 1);
     if (!s_audio_sbuf) {
         ESP_LOGE(TAG, "Audio stream buffer alloc failed");
-        fill_screen_solid(ili9341_rgb565(255, 0, 0));
+        //fill_screen_solid(ili9341_rgb565(255, 0, 0));
         return;
     }
     xTaskCreatePinnedToCore(audio_write_task, "audio_write",
@@ -464,7 +465,7 @@ void app_main(void)
         .core_id    = 0,
     });
 
-    fill_screen_solid(ili9341_rgb565(0, 0, 255));  /* blue = ready */
+    //fill_screen_solid(ili9341_rgb565(0, 0, 255));  /* blue = ready */
     ESP_LOGI(TAG, "Ready -- image: 8080 | audio: 8081 | cmd: 8082");
 
     for (;;) {
